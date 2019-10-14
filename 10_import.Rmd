@@ -1,0 +1,221 @@
+---
+title: "10_import"
+output: html_notebook
+---
+
+# The Data
+
+Every year, the U.S. Consumer Product Safety Commission tracks emergency rooms visits to approximately 100 hospitals. The commission uses the resulting National Electronic Injury Surveillance System data to estimate national injury statistics, but it also publishes anonymized information for each consumer product–related visit, including the associated product code (e.g., 1701: “Artificial Christmas trees”) and a short narrative (“71 YO WM FRACTURED HIP WHEN GOT DIZZY AND FELL TAKING DOWN CHRISTMAS TREE AT HOME”). Here we are going to explore this data and see if we can find some interesting trends.
+
+The NEISS injury data are gathered from the emergency departments (ED) of approximately 100 hospitals selected as a probability sample of all 5,000+ U.S. hospitals with emergency departments. The data set is large, it is long data with almost 7.5 million observations over 20 years. The data contains 19 variables, these include a unique identifier, the date of the incident, the patients age, gender, race, codes designating the event and a short text description. 
+
+## Motivating Question
+
+So! There is a lot of data regarding how people get injured. I'm really curious if the hospital emergency department could be more efficient if it could predict the types of injuries and individuals arriving on any given day. I think there is value in both staffing, supplies, etc. So here we will look at some data about hospital emergency room events and try to use it to generate a model that can be used to predict incoming patients.
+
+# Libraries
+```{r Libraries}
+library(tidyverse)
+library(janitor)
+library(fs)
+library(lubridate)
+library(data.table)
+library(assertr)
+#install.packages("naniar")
+library(naniar)
+```
+
+# Imports Cleaning and Organizing
+
+First we are going to want to pull in the data, then we will clean it up and get it in a state where we can start applying features.
+
+## Importing
+
+We need to import the raw NEISS data. For assignment 4 I am only looking at a single year of data. But for future work I intend to look at the data as it changes over the 20 years available.
+
+### Code Indecises
+
+Much of the data is encoded, in order to make it understandable to a human we are going to use the following data to join readable names to the data set. The data is organized below.
+```{r code references import}
+coderef <- read_delim("data/code-ref/neiss-coderef.txt", 
+    "\t", escape_double = FALSE, trim_ws = TRUE) %>% clean_names()
+```
+
+
+### NEISS Injury Data
+
+Importing the NEISS data. This is the raw data from NEISS
+```{r Raw Data Import}
+neiss1999 <- read_delim("data/neiss1999.tsv", 
+    "\t", escape_double = FALSE, col_types = cols(Other_Diagnosis = col_double()), 
+    na = "NA", trim_ws = TRUE)
+
+problems1999 <- problems(neiss1999)
+```
+
+This code chunk will import ALL YEARS, I'm leaving it here for future use, but at the moment we will be focusing on the 1999 data exclusively and running only the above chunk.
+```{r Import Data, include = FALSE, results='hide', message=FALSE, warning=FALSE}
+neiss <- dir_ls(path ="~/data", glob = "*.tsv") %>%  #gives us a list of names to map
+  map_df(~read_delim(.,"\t", escape_double = FALSE, col_types = cols(Other_Diagnosis = col_character(), 
+        Treatment_Date = col_date(format = "%m/%d/%Y")), trim_ws = TRUE))
+```
+
+## Dealing with problems (AKA -Cleaning)
+
+The import resulted in 291 failures. These are due to a variety of causes, and I'm not sure exactly how to handle them. As a note, it's 291 out of 313,307 observations, 0.09%.
+```{r Exploring the Problems}
+problems1999
+problems1999dt <- as.data.table(problems1999)
+problems1999dt[,.N, by = .(col)]
+```
+### Exploring the Issue
+
+*Issue*
+Okay I figured out what is happening, but will need assistence to rememdy. It appears that the problems appear in sets of 4 issues. 
+1. There will be an error with a row that there were 19 columns expected but there were only 15 found.
+2. There will then be 3 errors on the following row. (say step 1 was with row 3537, these 3 will be errors with row 3538).
+  2a. CPSC_Case_Number - expected a double found a string
+  2b. Age - expected a number, found a string.
+  2c. Wrong number of columns (5 instead of 19)
+
+There are two 'Narrative' columns (Narrative_1 and Narrative_2). Narrative_2 is not a second field, but a continuation of Narrative_1. It appears Narrative_1 is splitting, the remaining text is put into the CPSC_Case_Number column and the rest of the data falls in that next row from there. 
+
+The solution would be to - For every row where this happens,take the shifted data and move it back. 
+
+For now, I will drop these rows, until I can find a way to rememdy this.
+
+=======
+So after doing more stuff below, I found out these rows weren't dropped, just some values. I also found a way to fix it after the import, but will want to implement a process for fixing it while importing.
+
+## Organizing
+
+I was originally generating the data decoding tables myself before coming across this document. Unfortunately it was a single document with all of the decoding in one table.
+I needed to break it up into decoders for each column. This is done here:
+```{r Code References Splitting}
+coderefsplit <- coderef %>%
+  group_by(format_name) %>%
+  group_split() %>%
+  set_names(unique(coderef$format_name))
+  
+age <- coderefsplit$AGELTTWO %>% 
+  select(starting_value = starting_value_for_format, ending_value = ending_value_for_format, label = format_value_label)
+
+bodypart <- coderefsplit$BDYPT %>% 
+  select(code = starting_value_for_format, desc = format_value_label)
+
+diagnosis <- coderefsplit$DIAG %>% 
+  select(code = starting_value_for_format, desc = format_value_label)
+
+disposition <- coderefsplit$DISP %>% 
+  select(code = starting_value_for_format, desc = format_value_label)
+
+fire_involve <- coderefsplit$FIRE %>% 
+  select(code = starting_value_for_format, fire_involve = format_value_label)
+
+gender <- coderefsplit$GENDER %>% 
+  select(code = starting_value_for_format, gender = format_value_label)
+
+location <- coderefsplit$LOC %>% 
+  select(code = starting_value_for_format, location = format_value_label)
+
+race <- coderefsplit$RACE %>% 
+  select(code = starting_value_for_format, race = format_value_label)
+
+product_ref <- coderefsplit$PROD %>% 
+  select(code = starting_value_for_format, product = format_value_label)
+```
+
+There's definitely a better way to do the above, and I welcome guidance! I thought about mapping, or looping, but wasn't sure how to implement it here effectively.
+
+
+
+## Assertions
+
+Luckily the data is well documented. This will allow us to design precise assertions for the data set.
+
+```{r Assertions and Corrections Attempt 1}
+colnames(neiss1999)
+
+neiss1999 %>%
+  assert(in_set(disposition$code), Disposition) %>% 
+  assert(in_set(bodypart$code), Body_Part) %>% 
+  assert(in_set(age$starting_value, 2:120), Age) %>% 
+  assert(in_set(c(0:3)), Sex) #Errored B/C of the problems on import, the following code fixed this assert.
+
+neiss1999 %>% #When the above assert failed, I noted that PSU was NA, I just wanted a preview of what was there
+  filter(is.na(PSU))
+```
+
+
+```{r Assertions and Corrections}
+#This for loop loops through every row in the data.frame. Whenever a row is missing a CPSC_Case_Number, it takes the data from that row and moves it back up to the previous row where it came from.
+for(i in seq_along(nrow(neiss1999))) { 
+  if(is.na(neiss1999[[i, 1]])){
+    neiss1999$Narrative_2[i - 1] <- neiss1999$Treatment_Date[i]
+    neiss1999$PSU[i - 1] <- neiss1999$Sex[i]
+    neiss1999$Weight[i - 1] <- neiss1999$Race[i]
+    #neiss1999[-c(i),] #Why did this not work?
+  }
+}
+
+#After the rows were put back together, the partial rows needed to be removed
+neiss1999 <- subset(neiss1999, !is.na(neiss1999$CPSC_Case_Number)) # Removes the overflowed rows we just merged back up
+
+#Ran the filter again to confirm that they were removed
+neiss1999 %>% 
+  filter(is.na(PSU))
+
+#Again confirming the above worked, 3537/3538 were known problem rows, we can see here that is no longer the case.
+neiss1999[3537:3538,] 
+```
+
+So... Having done the above, I now know how to fix the problems on import. Solving it this way lost us a bit of Narrative_1 and the Stratum value, though I am not sure what Stratum even is. When I work on importing all years I will write code to fix on import avoiding this loss of data.
+
+```{r Cleaning Data}
+#Solves issue of the 5 0's mentioned below
+neiss1999 <- neiss1999 %>% replace_with_na(replace = list(Product_2 = 0))
+
+#Converting Date to a date time, waited until here because there was bad data in this field up until this point
+neiss1999 <- neiss1999 %>% 
+  mutate(Treatment_Date = mdy(Treatment_Date))
+```
+
+
+```{r Assertions}
+colnames(neiss1999)
+
+neiss1999 %>%
+  assert(is_uniq(neiss1999$CPSC_Case_Number)) %>% 
+  assert(in_set(age$starting_value, 2:120), Age) %>% 
+  assert(in_set(c(0:3)), Sex) %>% 
+  assert(in_set(race$code), Race) %>% 
+  assert(in_set(bodypart$code), Body_Part) %>% 
+  assert(in_set(diagnosis$code), Diagnosis) %>% 
+  assert(in_set(disposition$code), Disposition) %>% 
+  assert(in_set(location$code), Location) %>% 
+  assert(in_set(fire_involve$code), Fire_Involvement) %>% 
+  assert(in_set(product_ref$code), Product_1) %>% 
+  assert(in_set(product_ref$code), Product_2) %>%  #Found five values that were 0, should be NA 
+  assert(within_bounds(0,200), Weight)
+
+```
+With the above all columns have been verified to be good, valid, etc.
+
+
+
+
+
+
+
+
+# Scratch Paper
+```{r}
+named_group_split <- function(.tbl, ...) {
+  grouped <- group_by(.tbl, ...)
+  names <- rlang::eval_bare(rlang::expr(paste(!!!group_keys(grouped), sep = " / ")))
+
+  grouped %>% 
+    group_split() %>% 
+    rlang::set_names(names)
+}
+```

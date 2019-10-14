@@ -1,0 +1,159 @@
+---
+title: "30_feature_engineering"
+output: html_notebook
+---
+
+Things I want to do:
+- Assign Age group indicators
+  We have numeric ages but they are not binned
+- Add weekday information
+- Bin Injuries by Activity?
+- Assign Seasons and season distribution
+- assign holiday indicator (1/0) and holiday distribution
+- group location indicators
+
+
+
+# Feature 1 - Add the weekday to the data
+
+Weekday information is always useful when trying to figure out when things happen. People behave differently depending on where they are in the week. Preliminary exploration of the data found a significant drop in visits on Fridays, and significant increases on Saturday and Sunday.
+
+```{r Add Weekday Feature}
+addwday <- function(df, var, label = T){
+  df %>% 
+    mutate(dotw = lubridate::wday({{var}}, label = T))
+}
+
+```
+
+## Test of the weekday Feature
+```{r Add Weekday Feature Test}
+neiss1999 %>% 
+  addwday(Treatment_Date) %>% 
+  select(dotw, everything())
+```
+
+# Feature 2 - Grouping patients my standard medical age groups
+
+So I did some research on standard medical age groups...There is a lot of information out there. I'm using here what the following paper suggested was the past standard for medical age groups. These can be updated as desired.
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3825015/
+
+This feature should help in making sense of how the data changes by age. If we know teenagers often do something it will be easier to see than to have to model on a selection of years. It will just be already built in.
+
+```{r Bin Patients Ages}
+agebinner <- function(df, var) {
+  df %>%
+    mutate(age_group = findInterval({{var}}, c(2, 6, 14, 19, 34, 49, 65, 79, 99, 120, 201, 223), rightmost.closed = TRUE))
+    #df$age_group <- as.factor(df$age_group) 
+  #Could not get it work, letting me convert to a factor in this function...The select below kept failing
+}
+```
+
+## Testing Age Binning Function
+```{r Age Bin Test}
+neiss1999 %>% 
+  agebinner(Age) %>% 
+  select(age_group, everything()) %>% 
+  arrange(-age_group)
+```
+Age Binning worked, though, it might be a bit confusing to read later due to the findInterval function.
+
+
+# Feature 3 - Appending a Daily count to each observation
+Very important to what I'm trying to explore is the amount of visits per day, this feature is going to add a column which attachs the totals by day to each date.
+
+```{r Add the Count column, echo = FALSE}
+
+daily_counter <- function(df, var){
+  df %>% 
+    add_count({{var}}, name = "dcount")
+}
+
+```
+
+## Testing the Daily counter feature
+```{r Daily Count Test}
+neiss1999 %>% 
+  daily_counter(Treatment_Date) %>% 
+  select(dcount, everything())
+```
+
+# Feature 4 - Adding Seasonal Information
+
+There were a few options here as far as adding a season column:
+https://en.wikipedia.org/wiki/Season
+
+My initial thought was to use the solstice/equinoxes. This is a little challanging as the dates change every year. But, as the dataset includes information from all over the US being incredibly technical about season dates seems unnecessary and cumbersome, so we will use the "Meteorological" definition of seasons as found in the above wikipedia page. These are easier to work with as they are standard year to year.
+
+
+Seasons affect whether people are outdoors or indoors, or maybe it is too cold to drive to the hospital, I believe this will play in to trends in hospital visits.
+
+```{r Feature 4 Assigning Seasons}
+seasons <- function(x){
+  if(x %in% 2:4) return("Spring")
+  if(x %in% 5:7) return("Summer")
+  if(x %in% 8:10) return("Fall")
+  if(x %in% c(11,12,1)) return("Winter")
+}
+
+assign_season <- function(df, var){
+  df %>% 
+  mutate(season = sapply(month({{var}}), seasons))
+}
+```
+
+## Testing Feature 4, seasonal identifier
+```{r Testing Assigned Season Function}
+neiss1999 %>% 
+  assign_season(Treatment_Date) %>% 
+  select(season, everything())
+```
+Success! Seasons have been assigned
+
+# Putting it all together
+
+If we want to see if it works in series let's give it a go
+```{r}
+neiss1999 %>% 
+  addwday(Treatment_Date) %>% 
+  agebinner(Age) %>% 
+  daily_counter(Treatment_Date) %>% 
+  assign_season(Treatment_Date)
+```
+
+It works! but as we can see, three of the functions work on Treatment_Date, and will only ever work on treatment date. Let's see if we can roll that in to 1 function?
+
+```{r Mega Date Function}
+seasons <- function(x){
+  if(x %in% 2:4) return("Spring")
+  if(x %in% 5:7) return("Summer")
+  if(x %in% 8:10) return("Fall")
+  if(x %in% c(11,12,1)) return("Winter")
+}
+
+contextualize_date <- function(df, var){
+  df %>%
+    add_count({{var}}, name = "dcount") %>% 
+    mutate(season = sapply(month({{var}}), seasons)) %>% 
+    mutate(dotw = lubridate::wday({{var}}, label = T))
+}
+```
+
+Heyyy Yes, it is possible. A good idea? Maybe not
+```{r Testing Combined Function}
+neiss1999 %>% 
+  contextualize_date(Treatment_Date)
+```
+
+One last thing, there are a few columns I either don't know what they contain or would be useless for modelling, so we ill drop them here.
+
+```{r}
+neiss1999 <-  neiss1999 %>% 
+  addwday(Treatment_Date) %>% 
+  agebinner(Age) %>% 
+  daily_counter(Treatment_Date) %>% 
+  assign_season(Treatment_Date) %>% 
+  select(-c(Narrative_1,Narrative_2, Stratum, PSU)) #Same as above but we are dropping the narrative columns which have a story, and the stratum column, no idea what that is, it's not in the documentation, and PSU as well.
+```
+
