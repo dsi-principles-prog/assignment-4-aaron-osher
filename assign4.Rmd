@@ -166,12 +166,3 @@ All we need to do is create the pipeline and return a DF with the new columns.
 Note: this will form the basis for your midterm project. Take advantage of TA's and my office hours. We can provide feedback and guidance. 
 
 
-```{r}
-df1 <- df %>% 
-  group_by(continent) %>% 
-  mutate(continent = 0) %>% 
-  ungroup()
-  
-
-```
-
